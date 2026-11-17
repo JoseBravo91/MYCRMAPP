@@ -1,0 +1,248 @@
+// Esquema de base de datos MyCrmApp
+// Convención: modelos/campos en camelCase (TypeScript), tablas/columnas en snake_case (PostgreSQL).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Rol {
+  ADMIN
+  GERENTE
+  VENDEDOR
+}
+
+enum EstadoCliente {
+  PROSPECTO
+  ACTIVO
+  INACTIVO
+}
+
+enum EtapaOportunidad {
+  PROSPECTO
+  COTIZACION
+  CIERRE
+  GANADO
+  PERDIDO
+}
+
+enum TipoAsset {
+  ICON
+  LOGO
+  AVATAR
+}
+
+enum TipoSeguimiento {
+  TAREA
+  LLAMADA
+  EMAIL
+  REUNION
+}
+
+model Usuario {
+  id               String    @id @default(cuid())
+  nombre           String    @db.VarChar(120)
+  email            String    @unique @db.VarChar(160)
+  passwordHash     String    @map("password_hash")
+  rol              Rol       @default(VENDEDOR)
+  activo           Boolean   @default(true)
+  intentosFallidos Int       @default(0) @map("intentos_fallidos")
+  bloqueadoHasta   DateTime? @map("bloqueado_hasta")
+  ultimoAcceso     DateTime? @map("ultimo_acceso")
+  avatarId         String?   @unique @map("avatar_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  clientes      Cliente[]
+  oportunidades Oportunidad[]
+  seguimientos  Seguimiento[]
+  refreshTokens RefreshToken[]
+  auditoria     AuditLog[]
+  avatar        Asset?         @relation("UsuarioAvatar", fields: [avatarId], references: [id], onDelete: SetNull)
+  assetsSubidos Asset[]        @relation("AssetAutor")
+
+  @@index([rol])
+  @@map("usuarios")
+}
+
+// Refresh tokens opacos: solo se guarda el hash SHA-256, nunca el valor.
+// familyId agrupa las rotaciones de una misma sesión para detectar reutilización.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique @map("token_hash")
+  familyId  String    @map("family_id")
+  usuarioId String    @map("usuario_id")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  userAgent String?   @map("user_agent") @db.VarChar(255)
+  ip        String?   @db.VarChar(64)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model Cliente {
+  id        String        @id @default(cuid())
+  nombre    String        @db.VarChar(120)
+  email     String?       @db.VarChar(160)
+  telefono  String?       @db.VarChar(30)
+  empresa   String?       @db.VarChar(120)
+  industria String?       @db.VarChar(80)
+  ciudad    String?       @db.VarChar(80)
+  notas     String?       @db.Text
+  estado    EstadoCliente @default(PROSPECTO)
+  ownerId   String        @map("owner_id")
+  deletedAt DateTime?     @map("deleted_at")
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  owner         Usuario       @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  oportunidades Oportunidad[]
+  seguimientos  Seguimiento[]
+  etiquetas     Etiqueta[]
+
+  @@index([nombre])
+  @@index([email])
+  @@index([ownerId])
+  @@index([deletedAt])
+  @@map("clientes")
+}
+
+// Relación N:N implícita con Cliente (tabla puente _ClienteToEtiqueta)
+model Etiqueta {
+  id     String @id @default(cuid())
+  nombre String @unique @db.VarChar(40)
+  color  String @default("#0033A0") @db.VarChar(7)
+
+  clientes Cliente[]
+
+  @@map("etiquetas")
+}
+
+model Oportunidad {
+  id                  String           @id @default(cuid())
+  titulo              String           @db.VarChar(160)
+  descripcion         String?          @db.Text
+  valorEstimado       Decimal          @default(0) @map("valor_estimado") @db.Decimal(14, 2)
+  probabilidad        Int              @default(10)
+  etapa               EtapaOportunidad @default(PROSPECTO)
+  fechaCierreEstimada DateTime?        @map("fecha_cierre_estimada") @db.Date
+  cerradaEn           DateTime?        @map("cerrada_en")
+  clienteId           String           @map("cliente_id")
+  ownerId             String           @map("owner_id")
+  deletedAt           DateTime?        @map("deleted_at")
+  createdAt           DateTime         @default(now()) @map("created_at")
+  updatedAt           DateTime         @updatedAt @map("updated_at")
+
+  cliente      Cliente       @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  owner        Usuario       @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  seguimientos Seguimiento[]
+
+  @@index([etapa])
+  @@index([clienteId])
+  @@index([ownerId])
+  @@index([deletedAt])
+  @@map("oportunidades")
+}
+
+model Seguimiento {
+  id              String          @id @default(cuid())
+  tipo            TipoSeguimiento @default(TAREA)
+  asunto          String          @db.VarChar(160)
+  descripcion     String?         @db.Text
+  fechaProgramada DateTime?       @map("fecha_programada")
+  completado      Boolean         @default(false)
+  completadoEn    DateTime?       @map("completado_en")
+  clienteId       String          @map("cliente_id")
+  oportunidadId   String?         @map("oportunidad_id")
+  ownerId         String          @map("owner_id")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  cliente     Cliente      @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  oportunidad Oportunidad? @relation(fields: [oportunidadId], references: [id], onDelete: SetNull)
+  owner       Usuario      @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@index([clienteId])
+  @@index([oportunidadId])
+  @@index([ownerId, completado])
+  @@map("seguimientos")
+}
+
+// Bitácora de seguridad y de llamadas a servicios externos (Gemini)
+model AuditLog {
+  id        String   @id @default(cuid())
+  usuarioId String?  @map("usuario_id")
+  accion    String   @db.VarChar(60)
+  entidad   String?  @db.VarChar(40)
+  entidadId String?  @map("entidad_id")
+  metadata  Json?
+  ip        String?  @db.VarChar(64)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  usuario Usuario? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+
+  @@index([usuarioId])
+  @@index([accion, createdAt])
+  @@map("audit_logs")
+}
+
+// Imágenes subidas por los usuarios (iconos, logo, avatares). Se guardan ya recortadas
+// y en tamaño final, por eso caben en la base de datos sin afectar el rendimiento.
+model Asset {
+  id        String    @id @default(cuid())
+  tipo      TipoAsset
+  nombre    String    @db.VarChar(80)
+  mimeType  String    @map("mime_type") @db.VarChar(40)
+  data      Bytes
+  bytes     Int
+  ancho     Int?
+  alto      Int?
+  autorId   String?   @map("autor_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  autor       Usuario?   @relation("AssetAutor", fields: [autorId], references: [id], onDelete: SetNull)
+  avatarDe    Usuario?   @relation("UsuarioAvatar")
+  itemsDeMenu MenuItem[]
+
+  @@index([tipo])
+  @@map("assets")
+}
+
+// Menú lateral configurable: dos niveles (grupos con hijos).
+// roles vacío significa visible para todos los roles.
+model MenuItem {
+  id       String  @id @default(cuid())
+  etiqueta String  @db.VarChar(40)
+  href     String? @db.VarChar(300)
+  iconoId  String? @map("icono_id")
+  padreId  String? @map("padre_id")
+  orden    Int     @default(0)
+  visible  Boolean @default(true)
+  roles    Rol[]   @default([])
+
+  icono Asset?     @relation(fields: [iconoId], references: [id], onDelete: SetNull)
+  padre MenuItem?  @relation("MenuJerarquia", fields: [padreId], references: [id], onDelete: Cascade)
+  hijos MenuItem[] @relation("MenuJerarquia")
+
+  @@index([padreId, orden])
+  @@map("menu_items")
+}
+
+// Configuración global clave-valor (tema, marca, asignación de iconos)
+model Configuracion {
+  clave          String   @id @db.VarChar(40)
+  valor          Json
+  actualizadoPor String?  @map("actualizado_por")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("configuracion")
+}
